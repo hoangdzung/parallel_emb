@@ -4,6 +4,7 @@ import sys, os
 import argparse
 
 import networkx as nx
+from networkx.algorithms.core import k_core, core_number
 import numpy as np 
 
 from pyspark import SparkContext
@@ -21,9 +22,11 @@ def parse_args():
                      type=int, help="Dimension size")
    parser.add_argument('--num_anchors', default=500, type=int,
                      help="Number of anchor nodes, required if num_anchors_percent is not specified.")
-   parser.add_argument('--num_anchors_percent', default=0.01, type=float,
+   parser.add_argument('--num_anchors_percent', default=None, type=float,
                      help="Number of anchor by percent, if specified, num_anchors_percent will be used rather than num_anchors.")
    parser.add_argument('--seed', default=42, type=int)
+
+   parser.add_argument('--anchors', default="border")
 
    # Evaluation by classification
    parser.add_argument('--train_percent', default=0.5,
@@ -101,19 +104,45 @@ for node, label in assignment_dict.items():
 
 assignment_dict_bd = sc.broadcast(assignment_dict)
 
-def count_cut(x):
-   count = 0
-   for node in G_boardcast.value.neighbors(x):
-      count += int(assignment_dict_bd.value[x] == assignment_dict_bd.value[node])
-   return x, count 
-
-my_list_rdd = sc.parallelize([i for i in G.nodes()]).map(lambda x: count_cut(x))
-count_cut_dict = dict(my_list_rdd.collect())
-sorted_anchors = sorted(count_cut_dict.items(),
-                        key=lambda x : x[1], reverse=True)
-
 num_anchors = args.num_anchors if args.num_anchors_percent is None else int(args.num_anchors_percent*len(G)) 
-anchors = sorted([i[0] for i in sorted_anchors[:num_anchors]])
+if args.anchors == "border":
+   def count_cut(x):
+      count = 0
+      for node in G_boardcast.value.neighbors(x):
+         count += int(assignment_dict_bd.value[x] == assignment_dict_bd.value[node])
+      return x, count 
+
+   my_list_rdd = sc.parallelize([i for i in G.nodes()]).map(lambda x: count_cut(x))
+   count_cut_dict = dict(my_list_rdd.collect())
+   sorted_anchors = sorted(count_cut_dict.items(),
+                           key=lambda x : x[1], reverse=True)
+
+   anchors = sorted([i[0] for i in sorted_anchors[:num_anchors]])
+elif args.anchors == "kcore":
+   G_copy = G.copy()
+   G_copy.remove_edges_from(nx.selfloop_edges(G_copy))
+   node2core = core_number(G_copy)
+   core2nodes = defaultdict(list)
+   for node, core in node2core.items():
+      core2nodes[core].append(node)
+   core2nnodes = {k:len(v) for k,v in core2nodes.items()}
+   maxK = max(core2nodes.keys())
+   k = None
+   if num_anchors <= core2nnodes[maxK]:
+      k=maxK 
+   else:
+      for i in reversed(range(maxK)):
+         core2nnodes[i] += core2nnodes[i+1]
+         if core2nnodes[i] > num_anchors:
+               if core2nnodes[i] - num_anchors > num_anchors - core2nnodes[i+1]:
+                  k = i+1
+               else:
+                  k=i
+               break
+   anchors = core2nodes[k]
+else:
+   assert NotImplementedError
+   
 anchors_bd = sc.broadcast(list(map(str, anchors)))
 
 subgraphs = []

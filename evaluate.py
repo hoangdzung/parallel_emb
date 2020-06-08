@@ -76,7 +76,7 @@ class ClassifierPytorch(object):
       optimizer = torch.optim.Adam(self.clf.parameters(), lr=learning_rate)  
       X = torch.FloatTensor([self.embeddings[x] for x in X])
       total_iter = 0
-      for epoch in range(10):
+      for epoch in range(20):
          for iter in range(n_iter):
                batchX = X[iter*BATCH_SIZE:(iter+1)*BATCH_SIZE].cuda()
                batchY = torch.FloatTensor(self.binarizer.transform(
